@@ -87,49 +87,56 @@ static tid_t allocate_tid (void);
    It is not safe to call thread_current() until this function
    finishes. */
 
-bool
-   cmp_wake_up_tick(const struct list_elem *a,
-                    const struct list_elem *b,
-                    void *aux UNUSED) {
-     struct thread *t1 = list_entry(a, struct thread, elem);
-     struct thread *t2 = list_entry(b, struct thread, elem);
-     return t1->wake_up_tick < t2->wake_up_tick;  // 더 빨리 깨어나야 하면 앞에 정렬
-   }
+bool /*추가-1*/
+cmp_wake_up_tick(const struct list_elem *a,
+                 const struct list_elem *b,
+                 void *aux UNUSED) {
+  ASSERT(a != NULL);
+  ASSERT(b != NULL);
 
-void
-thread_wakeup(int64_t current_ticks) {
+  struct thread *t1 = list_entry(a, struct thread, sleep_elem);
+  struct thread *t2 = list_entry(b, struct thread, sleep_elem);
+
+  ASSERT(is_thread(t1));
+  ASSERT(is_thread(t2));
+
+  return t1->wake_up_tick < t2->wake_up_tick;
+}
+
+void thread_sleep(int64_t ticks) { /*추가-1*/
+  struct thread *cur = thread_current();
+  enum intr_level old_level;
+
+  ASSERT(cur != idle_thread); // idle thread는 sleep 걸리지 않게 하기
+  ASSERT(intr_get_level() == INTR_ON); // sleep은 인터럽트 ON 상태에서 호출되어야 함
+
+  old_level = intr_disable();
+
+  cur->wake_up_tick = timer_ticks() + ticks;
+
+  list_insert_ordered(&sleep_queue, &cur->sleep_elem, cmp_wake_up_tick, NULL);
+
+  thread_block();
+
+  intr_set_level(old_level);
+}
+
+void thread_wakeup(int64_t current_ticks) { /*추가-1*/
   struct list_elem *e = list_begin(&sleep_queue);
 
   while (e != list_end(&sleep_queue)) {
-    struct thread *t = list_entry(e, struct thread, elem);
+    struct thread *t = list_entry(e, struct thread, sleep_elem);
 
-    // 아직 깨어날 시간이 안 됐으면 중단 (리스트가 정렬되어 있으므로)
+    ASSERT(is_thread(t)); // 유효한 thread인지 확인
+
     if (t->wake_up_tick > current_ticks)
       break;
 
-    // 깨어날 시간이 됐으면 ready_list로 이동 (깨우기!)
-    e = list_remove(e);  // remove는 다음 요소 반환
+    e = list_remove(e); // 다음 요소 반환
     thread_unblock(t);
   }
 }
 
-void
-   thread_sleep(int64_t ticks) {
-     struct thread *cur = thread_current();           // 현재 실행 중인 스레드, 추가
-     enum intr_level old_level = intr_disable();      // 인터럽트 끄기 (동기화용)
-   
-    // 🔥 현재 시각 + 대기 시간 = 깨어날 시간
-    cur->wake_up_tick = timer_ticks() + ticks;                      // 깨어나야 할 시점 저장
-   
-     // sleep_queue에 삽입 (깨어날 시간 빠른 순서로 정렬)
-     list_insert_ordered(&sleep_queue, &cur->elem,
-                         cmp_wake_up_tick, NULL);
-   
-     thread_block();                                  // 현재 스레드를 BLOCKED 상태로 전환
-   
-     intr_set_level(old_level);                       // 인터럽트 다시 켜기
-   }
-  
 void
 thread_init (void) 
 {
@@ -138,7 +145,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
-  list_init (&sleep_queue); /*추가*/
+  list_init (&sleep_queue); /*추가-1*/
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();

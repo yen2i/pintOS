@@ -82,8 +82,9 @@ typedef int tid_t;
    blocked state is on a semaphore wait list. */
 struct thread
   {
-    /* 추가, 현재 쓰레드가 깨어나야 할 tick */
+    /* 추가-1, 현재 쓰레드가 깨어나야 할 tick */
     int64_t wake_up_tick;       /* ⏰ Thread should wake up at this tick. */
+    struct list_elem sleep_elem;     /* 🔥 sleep_queue용 리스트 요소 */
 
     tid_t tid;                          /* Thread identifier. */
     enum thread_status status;          /* Thread state. */
