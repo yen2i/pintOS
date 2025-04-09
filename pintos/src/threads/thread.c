@@ -103,6 +103,14 @@ cmp_wake_up_tick(const struct list_elem *a,
   return t1->wake_up_tick < t2->wake_up_tick;
 }
 
+/*priority scheduling*/
+bool
+cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+  struct thread *t_a = list_entry(a, struct thread, elem);
+  struct thread *t_b = list_entry(b, struct thread, elem);
+  return t_a->priority > t_b->priority;
+}
+
 void thread_sleep(int64_t ticks) { /*추가-1*/
   struct thread *cur = thread_current();
   enum intr_level old_level;
@@ -264,6 +272,11 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  /*priority scheduling*/
+  if (t->priority > thread_current()->priority) {
+  thread_yield();
+}
+
   return tid;
 }
 
@@ -300,7 +313,8 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  /*priority scheduling*/
+  list_insert_ordered(&ready_list, &t->elem, cmp_priority, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -370,8 +384,11 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+
+  /*priority scheduling*/
+  if (cur != idle_thread)
+  list_insert_ordered(&ready_list, &cur->elem, cmp_priority, NULL);
+
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
