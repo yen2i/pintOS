@@ -273,9 +273,8 @@ thread_create (const char *name, int priority,
   thread_unblock (t);
 
   /*priority scheduling*/
-  if (t->priority > thread_current()->priority) {
-  thread_yield();
-}
+  if (thread_current()->priority < t->priority)
+  thread_yield ();
 
   return tid;
 }
@@ -411,11 +410,31 @@ thread_foreach (thread_action_func *func, void *aux)
     }
 }
 
-/* Sets the current thread's priority to NEW_PRIORITY. */
+/* Sets the current thread's priority to NEW_PRIORITY. schdeuling */
 void
-thread_set_priority (int new_priority) 
+thread_set_priority (int new_priority)
 {
-  thread_current ()->priority = new_priority;
+  struct thread *curr = thread_current ();
+  curr->original_priority = new_priority;
+
+  // 현재 기부받은 우선순위보다 낮을 경우만 변경
+  if (list_empty(&curr->donations) || new_priority > curr->priority) {
+    curr->priority = new_priority;
+  }
+
+  // 현재보다 높은 우선순위가 ready list에 있으면 양보
+  test_max_priority();
+}
+
+/*scheduling*/
+void
+test_max_priority(void)
+{
+  if (!list_empty(&ready_list)) {
+    struct thread *t = list_entry(list_front(&ready_list), struct thread, elem);
+    if (t->priority > thread_current()->priority)
+      thread_yield();
+  }
 }
 
 /* Returns the current thread's priority. */

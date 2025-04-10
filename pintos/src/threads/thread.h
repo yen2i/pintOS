@@ -86,6 +86,13 @@ struct thread
     int64_t wake_up_tick;       /* ⏰ Thread should wake up at this tick. */
     struct list_elem sleep_elem;     /* 🔥 sleep_queue용 리스트 요소 */
 
+    /* Priority scheduling */
+   int original_priority;               // 스레드의 원래 우선순위
+   struct list donations;              // 우선순위 기부 받은 스레드들의 리스트
+   struct lock *wait_on_lock;          // 스레드가 기다리고 있는 lock
+   struct list_elem donation_elem;     // donations 리스트에 쓰이는 요소
+
+
     tid_t tid;                          /* Thread identifier. */
     enum thread_status status;          /* Thread state. */
     char name[16];                      /* Name (for debugging purposes). */
