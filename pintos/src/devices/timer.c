@@ -17,6 +17,8 @@
 #error TIMER_FREQ <= 1000 recommended
 #endif
 
+extern struct thread *idle_thread;
+
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
 
@@ -163,6 +165,7 @@ timer_print_stats (void)
   printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
 
+
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
@@ -172,6 +175,22 @@ timer_interrupt (struct intr_frame *args UNUSED)
 
   // 🔥 여기 추가1
   thread_wakeup(ticks);
+
+  if (thread_mlfqs) {
+    struct thread *curr = thread_current();
+
+    // 매 tick: running thread의 recent_cpu += 1
+    if (curr != idle_thread)
+      curr->recent_cpu = add_mixed(curr->recent_cpu, 1);  // 고정소수점 덧셈
+
+    // 매 100 tick: load_avg, recent_cpu 갱신
+    if (ticks % TIMER_FREQ == 0)  // 100
+      update_load_avg_and_recent_cpu();  // 아래 단계에서 구현 예정
+
+    // 매 4 tick: priority 갱신
+    if (ticks % 4 == 0)
+      update_all_priorities();  // 아래 단계에서 구현 예정
+  }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

@@ -100,6 +100,10 @@ struct thread
     struct list donation;
     struct list_elem donation_elem;
 
+    /* For 4.4BSD scheduler */
+   int nice;              // 스레드의 nice 값 (-20 ~ 20 범위)
+   int recent_cpu;        // 최근 CPU 사용량 (고정소수점으로 저장)
+
     
     struct list_elem allelem;           /* List element for all threads list. */
 
@@ -119,6 +123,10 @@ struct thread
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
+extern int load_avg;
+extern struct thread *idle_thread;
+void update_load_avg_and_recent_cpu(void);
+void update_thread_priority(struct thread *t);
 
 void thread_sleep(int64_t ticks);
 void thread_wakeup(int64_t current_ticks);
