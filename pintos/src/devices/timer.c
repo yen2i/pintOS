@@ -87,11 +87,10 @@ timer_elapsed (int64_t then)
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 
+/*alarm*/
 void timer_sleep(int64_t ticks) {
-    ASSERT(intr_get_level() == INTR_ON);
-    if (ticks <= 0) return;
-  /*추가1*/
-  thread_sleep(ticks);                          // 🔥 현재 스레드를 sleep queue에 넣기
+  int64_t start = timer_ticks ();
+  thread_sleep (start + ticks);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
