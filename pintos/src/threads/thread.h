@@ -85,19 +85,22 @@ struct thread
     /* 추가-1, 현재 쓰레드가 깨어나야 할 tick */
     int64_t wake_up_tick;       /* ⏰ Thread should wake up at this tick. */
     struct list_elem sleep_elem;     /* 🔥 sleep_queue용 리스트 요소 */
-
-    /* Priority scheduling */
-   int original_priority;               // 스레드의 원래 우선순위
-   struct list donations;              // 우선순위 기부 받은 스레드들의 리스트
-   struct lock *wait_on_lock;          // 스레드가 기다리고 있는 lock
-   struct list_elem donation_elem;     // donations 리스트에 쓰이는 요소
-
+    
 
     tid_t tid;                          /* Thread identifier. */
     enum thread_status status;          /* Thread state. */
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
+
+
+    int original_priority;             // 아래 4개 요소 추가
+    
+    struct lock *waiting_for_lock;    // 현재 스레드가 기다리는 잠금 객체
+    struct list donation;
+    struct list_elem donation_elem;
+
+    
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
@@ -119,9 +122,12 @@ extern bool thread_mlfqs;
 
 void thread_sleep(int64_t ticks);
 void thread_wakeup(int64_t current_ticks);
-bool cmp_wake_up_tick(const struct list_elem *a,
-                      const struct list_elem *b,
-                      void *aux);
+void preempt_check(void);
+bool compared_priority (const struct list_elem *f, const struct list_elem *s, void *aux);
+bool compared_donate_priority (const struct list_elem *l, const struct list_elem *s, void *aux);
+void donate_priority (void);
+void removed_lock (struct lock *lock);
+void restore_priority (void);
 
 void thread_init (void);
 void thread_start (void);
@@ -153,7 +159,7 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
-/*priority scheduling*/
-void test_max_priority(void);
-bool cmp_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+
+
+
 #endif /* threads/thread.h */
