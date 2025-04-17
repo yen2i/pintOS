@@ -89,7 +89,7 @@ timer_elapsed (int64_t then)
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 
-/*alarm*/
+//Threads:AlarmClock-5
 void timer_sleep(int64_t ticks) {
   int64_t start = timer_ticks ();
   thread_sleep (start + ticks);
@@ -166,16 +166,16 @@ timer_print_stats (void)
 }
 
 
-/* Timer interrupt handler. */
+//Threads:AlarmClock-6
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
 
-  // 🔥 여기 추가1
-  thread_wakeup(ticks);
+  thread_wakeup(ticks); // 추가, ticks이 증가할때, wakeup function 실행되도록(일어날 thread 있는지 check)
 
+//Threads:BSD -4
   if (thread_mlfqs) {
     struct thread *curr = thread_current();
 

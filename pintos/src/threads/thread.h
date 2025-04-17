@@ -83,8 +83,8 @@ typedef int tid_t;
 struct thread
   {
     /* 추가-1, 현재 쓰레드가 깨어나야 할 tick */
-    int64_t wake_up_tick;       /* ⏰ Thread should wake up at this tick. */
-    struct list_elem sleep_elem;     /* 🔥 sleep_queue용 리스트 요소 */
+    int64_t wake_up_tick;       /*Thread should wake up at this tick. */
+    struct list_elem sleep_elem;     /* sleep_queue용 리스트 요소 */
     
 
     tid_t tid;                          /* Thread identifier. */
@@ -100,10 +100,9 @@ struct thread
     struct list donation;
     struct list_elem donation_elem;
 
-    /* For 4.4BSD scheduler */
-   int nice;              // 스레드의 nice 값 (-20 ~ 20 범위)
-   int recent_cpu;        // 최근 CPU 사용량 (고정소수점으로 저장)
-
+   //Threads:BSD -1
+   int nice;              // nice value of threads (-20 ~ 20)
+   int recent_cpu;        // recent cpu usage (use fixed-point.h)
     
     struct list_elem allelem;           /* List element for all threads list. */
 
@@ -128,8 +127,10 @@ extern struct thread *idle_thread;
 void update_load_avg_and_recent_cpu(void);
 void update_thread_priority(struct thread *t);
 
+//Threads:AlarmClock-1
 void thread_sleep(int64_t ticks);
 void thread_wakeup(int64_t current_ticks);
+
 void preempt_check(void);
 bool compared_priority (const struct list_elem *f, const struct list_elem *s, void *aux);
 bool compared_donate_priority (const struct list_elem *l, const struct list_elem *s, void *aux);

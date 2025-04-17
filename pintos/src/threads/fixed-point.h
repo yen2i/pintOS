@@ -1,3 +1,5 @@
+//Threads:BSD -12
+
 #ifndef FIXED_POINT_H
 #define FIXED_POINT_H
 

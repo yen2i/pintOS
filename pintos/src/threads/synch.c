@@ -69,7 +69,9 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
+      //Threads:PrioritySynchronization-1
       list_insert_ordered (&sema->waiters, &thread_current ()->elem, compared_priority, 0);
+      // list_push_back (&sema->waiters, &thread_current ()->elem);
       thread_block ();
     }
   sema->value--;
@@ -201,13 +203,15 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+//Threads:BSD -5
   if (thread_mlfqs)
   {
-    sema_down (&lock->semaphore);
-    lock->holder = thread_current ();
+    sema_down (&lock->semaphore);   //acquire lock
+    lock->holder = thread_current ();  //lock 주인 설정
     return;
   }
 
+ //Threads:PriorityDonation-6
   struct thread *cur = thread_current ();
   if (lock->holder)
   {
@@ -254,13 +258,15 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+//Threads:BSD -6
   if (thread_mlfqs)
     {
       lock->holder = NULL;
-      sema_up (&lock->semaphore);
+      sema_up (&lock->semaphore); // 대기자 깨우기
       return;
     }
     
+  //Threads:PriorityDonation-7
   removed_lock (lock);
   restore_priority ();
 
