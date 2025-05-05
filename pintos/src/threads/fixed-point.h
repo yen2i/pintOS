@@ -1,23 +1,28 @@
-//Threads:BSD -12
-
+//modified by me
 #ifndef FIXED_POINT_H
 #define FIXED_POINT_H
 
-/* 17.14 fixed-point representation */
-#define F (1 << 14)
 
-int int_to_fp(int n);                // n -> fixed-point
-int fp_to_int(int x);               // fixed-point -> int (truncation)
-int fp_to_int_round(int x);         // fixed-point -> int (rounding)
+#define F (1 << 14)  
 
-int add_fp(int x, int y);           // x + y
-int sub_fp(int x, int y);           // x - y
-int add_mixed(int x, int n);        // x + n
-int sub_mixed(int x, int n);        // x - n
 
-int mult_fp(int x, int y);          // x * y
-int mult_mixed(int x, int n);       // x * n
-int div_fp(int x, int y);           // x / y
-int div_mixed(int x, int n);        // x / n
 
-#endif /* fixed-point.h */
+
+int fp_to_int_zero(int x);        
+int fp_to_int_nearest(int x);    
+int int_to_fp(int n);
+
+
+int fp_add(int x, int y);
+int fp_sub(int x, int y);
+int fp_add_int(int x, int n);
+int fp_sub_int(int x, int n);
+
+
+int fp_mul(int x, int y);
+int fp_mul_int(int x, int n);
+int fp_div(int x, int y);
+int fp_div_int(int x, int n);
+
+
+#endif

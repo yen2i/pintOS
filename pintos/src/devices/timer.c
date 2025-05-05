@@ -7,6 +7,7 @@
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include "threads/fixed_point.h"
   
 /* See [8254] for hardware details of the 8254 timer chip. */
 
@@ -16,8 +17,6 @@
 #if TIMER_FREQ > 1000
 #error TIMER_FREQ <= 1000 recommended
 #endif
-
-extern struct thread *idle_thread;
 
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
@@ -88,11 +87,18 @@ timer_elapsed (int64_t then)
 
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
+//modified by me
+/* Modification of timer_sleep from bust-wait to sleep-wakeup*/
+void
+timer_sleep (int64_t ticks) 
+{
+  if (ticks <= 0) return;
 
-//Threads:AlarmClock-5
-void timer_sleep(int64_t ticks) {
-  int64_t start = timer_ticks ();
-  thread_sleep (start + ticks);
+  int64_t wakeup_tick = timer_ticks() + ticks;
+
+  ASSERT (intr_get_level () == INTR_ON);
+
+  thread_sleep(wakeup_tick);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -165,32 +171,15 @@ timer_print_stats (void)
   printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
 
-
-//Threads:AlarmClock-6
+/* Timer interrupt handler. */
+//modified by me
+/*modification of timer_interrupt adding wake_up fuction*/
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
-
-  thread_wakeup(ticks); // 추가, ticks이 증가할때, wakeup function 실행되도록(일어날 thread 있는지 check)
-
-//Threads:BSD -4
-  if (thread_mlfqs) {
-    struct thread *curr = thread_current();
-
-    // 매 tick: running thread의 recent_cpu += 1
-    if (curr != idle_thread)
-      curr->recent_cpu = add_mixed(curr->recent_cpu, 1);  // 고정소수점 덧셈
-
-    // 매 100 tick: load_avg, recent_cpu 갱신
-    if (ticks % TIMER_FREQ == 0)  // 100
-      update_load_avg_and_recent_cpu();  // 아래 단계에서 구현 예정
-
-    // 매 4 tick: priority 갱신
-    if (ticks % 4 == 0)
-      update_all_priorities();  // 아래 단계에서 구현 예정
-  }
+  thread_wakeup(ticks);
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

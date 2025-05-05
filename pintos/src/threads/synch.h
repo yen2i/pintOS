@@ -17,9 +17,6 @@ bool sema_try_down (struct semaphore *);
 void sema_up (struct semaphore *);
 void sema_self_test (void);
 
-bool compared_priority_of_sema (const struct list_elem *l, const struct list_elem *s, void *aux);
-
-
 /* Lock. */
 struct lock 
   {
@@ -41,6 +38,7 @@ struct condition
 
 void cond_init (struct condition *);
 void cond_wait (struct condition *, struct lock *);
+bool cond_priority_compare(const struct list_elem *a, const struct list_elem *b, void *aux);
 void cond_signal (struct condition *, struct lock *);
 void cond_broadcast (struct condition *, struct lock *);
 
