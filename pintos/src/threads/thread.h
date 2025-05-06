@@ -107,6 +107,9 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    /* Exit status for user program (Project 2). */
+      int exit_status;
+
 #endif
 
     /* Owned by thread.c. */
