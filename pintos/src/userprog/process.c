@@ -95,7 +95,7 @@ start_process (void *file_name_)
   success = load (argv[0], &if_.eip, &if_.esp);
 
   argument_stack(argv, argc, &if_.esp);   // 인자 push 완료`
-  hex_dump(if_.esp, if_.esp, `128, true);  // 바로 여기서 출력!
+  hex_dump(if_.esp, if_.esp, 128, true);  // 바로 여기서 출력!
 
   // 4. load 실패 처리
   if (!success) {
