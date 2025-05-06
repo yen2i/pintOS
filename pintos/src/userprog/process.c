@@ -20,60 +20,146 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+/*Argument Parsing - 3 선언 추가*/
+static void argument_stack(char **argv, int argc, void **esp);
+
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
+
+/*Argument Parsing -1 */
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy;
+  char *fn_copy, *file_name_copy, *save_ptr;
   tid_t tid;
 
-  /* Make a copy of FILE_NAME.
-     Otherwise there's a race between the caller and load(). */
+  /* Make a copy of FILE_NAME for the new thread. */
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  /* Make another copy for strtok_r parsing */
+  file_name_copy = palloc_get_page(0);
+  if (file_name_copy == NULL) {
+    palloc_free_page(fn_copy);
+    return TID_ERROR;
+  }
+  strlcpy(file_name_copy, file_name, PGSIZE);
+
+  /* Parse the program name (e.g., "/bin/ls") */
+  char *program_name = strtok_r(file_name_copy, " ", &save_ptr);
+
+  /* Create thread using program name only */
+  tid = thread_create (program_name, PRI_DEFAULT, start_process, fn_copy);
+
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    palloc_free_page (fn_copy);
+
+  palloc_free_page(file_name_copy); // cleanup after parsing
+
   return tid;
 }
 
 /* A thread function that loads a user process and starts it
    running. */
+
+/*Argument Parsing -2*/
 static void
 start_process (void *file_name_)
 {
-  char *file_name = file_name_;
+  char *fn_copy = file_name_;      // 전체 명령어 문자열이 들어있는 포인터
   struct intr_frame if_;
   bool success;
 
-  /* Initialize interrupt frame and load executable. */
+  // 1. argv[]와 argc 구성
+  char *argv[128];                 // 최대 인자 수
+  int argc = 0;
+  char *token, *save_ptr;
+
+  for (token = strtok_r(fn_copy, " ", &save_ptr); token != NULL;
+       token = strtok_r(NULL, " ", &save_ptr)) {
+    argv[argc++] = token;
+  }
+
+  // 2. 인터럽트 프레임 초기화
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
 
-  /* If load failed, quit. */
-  palloc_free_page (file_name);
-  if (!success) 
+  // 3. 프로그램 로드: argv[0] = 실행파일 이름
+  success = load (argv[0], &if_.eip, &if_.esp);
+
+  argument_stack(argv, argc, &if_.esp);   // 인자 push 완료`
+  hex_dump(if_.esp, if_.esp, `128, true);  // 바로 여기서 출력!
+
+  // 4. load 실패 처리
+  if (!success) {
+    palloc_free_page (fn_copy);
     thread_exit ();
+  }
 
-  /* Start the user process by simulating a return from an
-     interrupt, implemented by intr_exit (in
-     threads/intr-stubs.S).  Because intr_exit takes all of its
-     arguments on the stack in the form of a `struct intr_frame',
-     we just point the stack pointer (%esp) to our stack frame
-     and jump to it. */
+  // 5. argument_stack() 호출로 유저 스택 세팅
+  argument_stack(argv, argc, &if_.esp);
+
+  // 6. 디버깅용 hex_dump (선택적으로 추가)
+  // hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
+
+  // 7. 파일 복사 메모리 해제
+  palloc_free_page (fn_copy);
+
+  // 8. 유저프로그램 실행
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
+}
+
+/*Argument Parsing -3*/
+static void
+argument_stack(char **argv, int argc, void **esp) {
+  char *arg_addr[128];
+
+  // 문자열을 스택에 복사
+  int i;
+  for (i = argc - 1; i >= 0; i--) {
+    int len = strlen(argv[i]) + 1;
+    *esp -= len;
+    memcpy(*esp, argv[i], len);
+    arg_addr[i] = *esp;
+  }
+
+  // word align (4의 배수로)
+  uintptr_t align = (uintptr_t)(*esp) % 4;
+  if (align) {
+    *esp -= align;
+    memset(*esp, 0, align);
+  }
+
+  // NULL pointer (argv 끝 표시)
+  *esp -= sizeof(char *);
+  memset(*esp, 0, sizeof(char *));
+
+  // argv 주소 배열을 역순으로 푸시
+  for (i = argc - 1; i >= 0; i--) {
+    *esp -= sizeof(char *);
+    memcpy(*esp, &arg_addr[i], sizeof(char *));
+  }
+
+  // argv 포인터 푸시
+  char **argv_start = *esp;
+  *esp -= sizeof(char **);
+  memcpy(*esp, &argv_start, sizeof(char **));
+
+  // argc 푸시
+  *esp -= sizeof(int);
+  memcpy(*esp, &argc, sizeof(int));
+
+  // fake return address
+  *esp -= sizeof(void *);
+  memset(*esp, 0, sizeof(void *));
 }
 
 /* Waits for thread TID to die and returns its exit status.  If
@@ -86,8 +172,12 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
-{
+process_wait (tid_t child_tid UNUSED) {
+  volatile int i;
+  for (i = 0; i < 100000000; i++); // 기다림
+  {
+
+  }
   return -1;
 }
 
