@@ -71,51 +71,47 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
-  char *fn_copy = file_name_;      // 전체 명령어 문자열이 들어있는 포인터
+  char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
 
-  // 1. argv[]와 argc 구성
-  char *argv[128];                 // 최대 인자 수
-  int argc = 0;
+  // 1. 인자 파싱
+  char *parse[128];
+  int count = 0;
   char *token, *save_ptr;
 
-  for (token = strtok_r(fn_copy, " ", &save_ptr); token != NULL;
+  for (token = strtok_r(file_name, " ", &save_ptr); token != NULL;
        token = strtok_r(NULL, " ", &save_ptr)) {
-    argv[argc++] = token;
+    parse[count++] = token;
   }
 
   // 2. 인터럽트 프레임 초기화
-  memset (&if_, 0, sizeof if_);
+  memset(&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
 
-  // 3. 프로그램 로드: argv[0] = 실행파일 이름
-  success = load (argv[0], &if_.eip, &if_.esp);
+  // 3. 프로그램 로드
+  success = load(parse[0], &if_.eip, &if_.esp);
 
-  argument_stack(argv, argc, &if_.esp);   // 인자 push 완료`
-  hex_dump(if_.esp, if_.esp, 128, true);  // 바로 여기서 출력!
-
-  // 4. load 실패 처리
+  // 4. 실패 시 종료
   if (!success) {
-    palloc_free_page (fn_copy);
-    thread_exit ();
+    palloc_free_page(file_name);
+    thread_exit();
   }
 
-  // 5. argument_stack() 호출로 유저 스택 세팅
-  argument_stack(argv, argc, &if_.esp);
+  // 5. 성공 시에만 스택 세팅 및 디버깅 출력
+  argument_stack(parse, count, &if_.esp);
+  hex_dump(if_.esp, if_.esp, PHYS_BASE - (uintptr_t)if_.esp, true);
 
-  // 6. 디버깅용 hex_dump (선택적으로 추가)
-  // hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
-
-  // 7. 파일 복사 메모리 해제
-  palloc_free_page (fn_copy);
-
-  // 8. 유저프로그램 실행
+  printf("\n");
+  // 6. 메모리 해제 및 실행
+  palloc_free_page(file_name);
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
-  NOT_REACHED ();
+  NOT_REACHED();
 }
+
+
 
 /*Argument Parsing -3*/
 static void
@@ -173,8 +169,9 @@ argument_stack(char **argv, int argc, void **esp) {
    does nothing. */
 int
 process_wait (tid_t child_tid UNUSED) {
+  
   volatile int i;
-  for (i = 0; i < 100000000; i++); // 기다림
+  for (i = 0 ; i < 1000000000 ; i ++)
   {
 
   }

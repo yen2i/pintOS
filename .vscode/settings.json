@@ -3,6 +3,7 @@
         "stdio.h": "c",
         "process.h": "c",
         "fixed-point.h": "c",
-        "vaddr.h": "c"
+        "vaddr.h": "c",
+        "flags.h": "c"
     }
 }

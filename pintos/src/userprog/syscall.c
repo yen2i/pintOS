@@ -1,20 +1,19 @@
-#include "userprog/syscall.h"
-#include <stdio.h>
 #include <syscall-nr.h>
-#include "threads/interrupt.h"
-#include "threads/thread.h"
-#include "threads/vaddr.h"
-#include "devices/shutdown.h"
-#include "userprog/process.h"
-#include "threads/pte.h"     // pagedir_get_page
-#include "threads/palloc.h"  // optional, for robustness
+ #include "threads/interrupt.h"
+ #include "threads/thread.h"
+ #include "threads/vaddr.h"
+ #include "devices/shutdown.h"
+ #include "userprog/process.h"
+ #include "threads/pte.h"     // pagedir_get_page
+ #include "threads/palloc.h"  // optional, for robustness
 
-// 함수 프로토타입 선언
+ // 함수 프로토타입 선언
 static void syscall_handler(struct intr_frame *f);
 static bool is_valid_ptr(const void *usr_ptr);
 void halt(void);
 void exit(int status);
 int wait(int pid);
+
 
 // 시스템 콜 초기화
 void syscall_init(void) {
