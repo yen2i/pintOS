@@ -5,6 +5,7 @@
         "fixed-point.h": "c",
         "vaddr.h": "c",
         "flags.h": "c",
-        "console.h": "c"
+        "console.h": "c",
+        "synch.h": "c"
     }
 }

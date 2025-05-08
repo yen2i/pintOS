@@ -36,17 +36,31 @@ process_execute (const char *file_name)
   char *fn_copy;
   tid_t tid;
 
-  // 1. 명령어 전체 문자열 복사
+  // (1) 실행할 명령어 전체 문자열 복사
   fn_copy = palloc_get_page(0);
   if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy(fn_copy, file_name, PGSIZE);
+  strlcpy(fn_copy, file_name, PGSIZE);  // ⬅️ 이게 실제 인자로 넘길 문자열
 
-  // 2. 스레드 생성 - 실행파일 이름은 그냥 임의의 이름 사용 가능
-  tid = thread_create("user_prog", PRI_DEFAULT, start_process, fn_copy);
+  // (2) 실행파일 이름만 파싱해서 thread 이름으로 사용
+  char *exec_name = palloc_get_page(0);
+  if (exec_name == NULL) {
+    palloc_free_page(fn_copy);
+    return TID_ERROR;
+  }
+  strlcpy(exec_name, file_name, PGSIZE);
 
+  char *save_ptr;
+  char *prog_name = strtok_r(exec_name, " ", &save_ptr); // "args-single"
+
+  // (3) 스레드 생성
+  tid = thread_create(prog_name, PRI_DEFAULT, start_process, fn_copy);
+
+  // (4) 실패 처리
   if (tid == TID_ERROR)
     palloc_free_page(fn_copy);
+
+  palloc_free_page(exec_name);  // 🎯 메모리 누수 방지
 
   return tid;
 }
@@ -65,7 +79,8 @@ start_process (void *file_name_)
        token != NULL;
        token = strtok_r(NULL, " ", &save_ptr))
 {
-  argv[argc++] = token;
+  argv[argc] = palloc_get_page(0);
+  strlcpy(argv[argc++], token, PGSIZE);
 }
 
   /* 2. 인터럽트 프레임 초기화 */
@@ -74,21 +89,20 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
 
-  /* 3. 프로그램 로딩 (argv[0] = 실행파일 이름) */
-  printf("### argv[0] = %s\n", argv[0]);
   success = load(argv[0], &if_.eip, &if_.esp);
-  if (!success)
+  printf("[DEBUG] eip = %p, esp = %p\n", if_.eip, if_.esp);
+
+
+if (success) {
+  argument_stack(argv, argc, &if_.esp);         // 반드시 load 성공 후 호출
+  printf("[DEBUG] Before user program jump\n");
+  hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
+  printf("[DEBUG] stack top = %p\n", if_.esp);
+
+} else {
   thread_exit();
-
-/* 스택 정렬은 load()에서 setup_stack으로 이루어졌으니, 이제 올려준다 */
-argument_stack(argv, argc, &if_.esp);
-hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
-
-
-  /* 4. 메모리 해제 및 실패 처리 */
-  palloc_free_page(file_name);
-  if (!success)
-    thread_exit();
+}
+palloc_free_page(file_name);
 
   /* 7. 유저 프로세스로 진입 */
   asm volatile ("movl %0, %%esp; jmp intr_exit"
@@ -127,9 +141,9 @@ argument_stack(char *argv[], int argc, void **esp) {
   }
 
   // 5. Push argv (address of argv[0])
-  char **argv_addr = (char **)*esp;
+  char **argv_start = (char **)*esp;
   *esp -= sizeof(char **);
-  *(char ***)*esp = argv_addr;
+  *(char ***)*esp = argv_start;
 
   // 6. Push argc
   *esp -= sizeof(int);
