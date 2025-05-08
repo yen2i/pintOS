@@ -76,11 +76,9 @@ start_process (void *file_name_)
   bool success;            // ← load 성공 여부
 
   for (token = strtok_r(file_name, " ", &save_ptr);
-       token != NULL;
-       token = strtok_r(NULL, " ", &save_ptr))
-{
-  argv[argc] = palloc_get_page(0);
-  strlcpy(argv[argc++], token, PGSIZE);
+     token != NULL;
+     token = strtok_r(NULL, " ", &save_ptr)) {
+  argv[argc++] = token;  // ✅ 여기에서 palloc 하지 마세요!
 }
 
   /* 2. 인터럽트 프레임 초기화 */
@@ -90,32 +88,26 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
 
   success = load(argv[0], &if_.eip, &if_.esp);
-  printf("[DEBUG] eip = %p, esp = %p\n", if_.eip, if_.esp);
 
+if (!success) {
+    palloc_free_page(file_name);  // ❗실패했을 때만 해제
+    thread_exit();
+  }
 
-if (success) {
-  argument_stack(argv, argc, &if_.esp);         // 반드시 load 성공 후 호출
-  printf("[DEBUG] Before user program jump\n");
-  hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
-  printf("[DEBUG] stack top = %p\n", if_.esp);
-
-} else {
-  thread_exit();
-}
-palloc_free_page(file_name);
+  // 스택에 인자 넣기
+  argument_stack(argv, argc, &if_.esp);
+  //hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
 
   /* 7. 유저 프로세스로 진입 */
   asm volatile ("movl %0, %%esp; jmp intr_exit"
                 : : "g" (&if_) : "memory");
   NOT_REACHED();
 }
-
-static void
-argument_stack(char *argv[], int argc, void **esp) {
+static void argument_stack(char *argv[], int argc, void **esp) {
   char *arg_addrs[128];
   int i;
 
-  // 1. Push arguments' strings (from last to first)
+  // 1. Push strings (역순으로 넣되, 주소는 정순으로 저장)
   for (i = argc - 1; i >= 0; i--) {
     size_t len = strlen(argv[i]) + 1;
     *esp -= len;
@@ -123,33 +115,35 @@ argument_stack(char *argv[], int argc, void **esp) {
     arg_addrs[i] = *esp;
   }
 
-  // 2. Word-align (4-byte alignment)
-  uintptr_t align = (uintptr_t)(*esp) % 4;
-  if (align > 0) {
-    *esp -= align;
-    memset(*esp, 0, align);
+  // 2. Word-align
+  uintptr_t misalign = (uintptr_t)(*esp) % 4;
+  if (misalign > 0) {
+    *esp -= misalign;
+    memset(*esp, 0, misalign);
   }
 
-  // 3. NULL sentinel for argv[argc]
+  // 3. NULL sentinel
   *esp -= sizeof(char *);
   *(char **)*esp = NULL;
 
-  // 4. Push each argv[i] (from last to first)
-  for (i = argc - 1; i >= 0; i--) {
+  // 4. Push argv[i] pointers (정순)
+  for (i = 0; i < argc; i++) {
     *esp -= sizeof(char *);
     *(char **)*esp = arg_addrs[i];
   }
 
-  // 5. Push argv (address of argv[0])
+  // 5. Save argv pointer
   char **argv_start = (char **)*esp;
+
+  // 6. Push argv
   *esp -= sizeof(char **);
   *(char ***)*esp = argv_start;
 
-  // 6. Push argc
+  // 7. Push argc
   *esp -= sizeof(int);
   *(int *)*esp = argc;
 
-  // 7. Push fake return address
+  // 8. Fake return address
   *esp -= sizeof(void *);
   *(void **)*esp = NULL;
 }

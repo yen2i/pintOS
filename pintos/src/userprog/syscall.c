@@ -19,7 +19,6 @@
 static void syscall_handler(struct intr_frame *f);
 struct lock filesys_lock;
 
-
 /* 시스템 콜 초기화 */
 void syscall_init(void) {
   intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
@@ -83,16 +82,16 @@ int wait(int pid) {
 }
 
 int write(int fd, const void *buffer, unsigned size) {
-  if (buffer == NULL || !is_user_vaddr(buffer)) exit(-1);
-  if (pagedir_get_page(thread_current()->pagedir, buffer) == NULL)
-    exit(-1);
 
+  if (buffer == NULL || !is_user_vaddr(buffer)) {
+    exit(-1);
+  }
   lock_acquire(&filesys_lock);
 
   int bytes_written = 0;
-
+  
   if (fd == 1) {
-    putbuf(buffer, size);
+    putbuf((char *)buffer, size);  // 반드시 캐스팅
     bytes_written = size;
   }else {
     bytes_written = 0;
@@ -103,6 +102,9 @@ int write(int fd, const void *buffer, unsigned size) {
 }
 
 bool is_valid_ptr(const void *usr_ptr) {
-  if (usr_ptr == NULL || !is_user_vaddr(usr_ptr)) return false;
-  return pagedir_get_page(thread_current()->pagedir, usr_ptr) != NULL;
+  return usr_ptr != NULL
+      && is_user_vaddr(usr_ptr)
+      && pagedir_get_page(thread_current()->pagedir, usr_ptr) != NULL;
 }
+
+

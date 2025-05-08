@@ -6,6 +6,7 @@
         "vaddr.h": "c",
         "flags.h": "c",
         "console.h": "c",
-        "synch.h": "c"
+        "synch.h": "c",
+        "pagedir.h": "c"
     }
 }
