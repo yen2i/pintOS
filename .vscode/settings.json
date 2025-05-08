@@ -4,6 +4,7 @@
         "process.h": "c",
         "fixed-point.h": "c",
         "vaddr.h": "c",
-        "flags.h": "c"
+        "flags.h": "c",
+        "console.h": "c"
     }
 }
