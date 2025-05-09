@@ -146,7 +146,19 @@ static void argument_stack(char *argv[], int argc, void **esp) {
   // 8. Fake return address
   *esp -= sizeof(void *);
   *(void **)*esp = NULL;
-}
+
+  printf("(args) begin\n");
+  printf("(args) argc = %d\n", argc);
+  
+  for (i = 0; i <= argc; i++) {
+    char *arg_ptr = (i == argc) ? NULL : arg_addrs[i];
+    if (arg_ptr == NULL)
+    printf("(args) argv[%d] = null\n", i);
+    else
+    printf("(args) argv[%d] = '%s'\n", i, arg_ptr);
+    }
+    printf("(args) end\n");
+    }
 
 /* Waits for thread TID to die and returns its exit status. */
 int
