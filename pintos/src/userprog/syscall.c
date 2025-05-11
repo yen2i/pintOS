@@ -3,108 +3,438 @@
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "userprog/process.h"
 #include "threads/vaddr.h"
-#include "threads/init.h"     // shutdown_power_off()
-#include "userprog/process.h" // process_wait()
-#include "threads/vaddr.h"
-#include "threads/thread.h"
-#include "threads/pte.h"
-#include "threads/synch.h"    // for lock_* functions
-#include "filesys/file.h"     // if file_write etc. is used later
-#include "lib/kernel/console.h" // for putbuf()
-#include "devices/shutdown.h"
 #include "userprog/pagedir.h"
+/* for shutdown_power_off */
+#include "devices/shutdown.h"
+#include "filesys/filesys.h"
+#include "threads/malloc.h"
+#include "filesys/file.h"
+#include "devices/input.h"
+#include "threads/synch.h"
 
-/* syscall handler 함수 선언 */
-static void syscall_handler(struct intr_frame *f);
-struct lock filesys_lock;
+struct file_descriptor
+{
+  int fd_num;
+  tid_t owner;
+  struct file *file_struct;
+  struct list_elem elem;
+};
 
-/* 시스템 콜 초기화 */
-void syscall_init(void) {
-  intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
-  lock_init(&filesys_lock);
+/* a list of open files, represents all the files open by the user process
+   through syscalls. */
+struct list open_files; 
+
+/* the lock used by syscalls involving file system to ensure only one thread
+   at a time is accessing file system */
+struct lock fs_lock;
+
+static void syscall_handler (struct intr_frame *);
+
+/* System call functions */
+static void halt (void);
+static void exit (int);
+static int wait (tid_t);
+static bool create(const char *file_name, unsigned initial_size);
+static bool remove(const char *file_name);
+static int open(const char *file_name);
+static int allocate_fd(void);
+static int filesize(int fd);
+static int read(int fd, void *buffer, unsigned size);
+static int write (int, const void *, unsigned);
+static void seek(int fd, unsigned position);
+static unsigned tell(int fd);
+static void close(int fd);
+static void close_open_file(int fd);
+
+
+
+/* End of system call functions */
+
+static struct file_descriptor *get_open_file (int);
+
+bool is_valid_ptr (const void *);
+//static int allocate_fd (void);
+
+void
+syscall_init (void) 
+{
+  intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+  list_init (&open_files);
+  lock_init (&fs_lock);
 }
 
-/* syscall handler 기본 구조 */
-static void syscall_handler(struct intr_frame *f) {
-  uint32_t syscall_num;
+static void
+syscall_handler (struct intr_frame *f)
+{
+  int * esp = f->esp;
 
-  // 유저 스택에서 syscall 번호 가져오기
-  if (!is_user_vaddr(f->esp)) {
+  if (!is_valid_ptr(esp) || pagedir_get_page(thread_current()->pagedir, esp) == NULL)
     exit(-1);
-  }
 
-  syscall_num = *(uint32_t *)(f->esp);  // 첫 번째 인자: syscall 번호
+  int syscall_number = * esp;
 
-  switch (syscall_num) {
-    case SYS_HALT:
-      halt();
-      break;
+  
+   
+  switch (syscall_number)
+        {
+        case SYS_HALT:
+          halt ();
+          break;
+          
+        case SYS_EXIT:
+          if(!is_valid_ptr(esp+1))
+            exit(-1);
+          exit (*(esp + 1));
+          break;
 
-    case SYS_EXIT:
-      if (!is_user_vaddr(f->esp + 4)) exit(-1);
-      exit(*(int *)(f->esp + 4));
-      break;
+        case SYS_WAIT:
+        if(!is_valid_ptr(esp+1))
+            exit(-1);
+          f->eax = wait (*(esp + 1));
+          break;
 
-    case SYS_WAIT:
-      if (!is_user_vaddr(f->esp + 4)) exit(-1);
-      f->eax = wait(*(int *)(f->esp + 4));
-      break;
+        case SYS_CREATE:
+          if (!is_valid_ptr(esp + 5) || !is_valid_ptr(*(esp + 4)))
+            exit(-1);
+          f->eax = create(*(esp + 4), *(esp + 5));
+          break;
 
-    case SYS_WRITE: {
-      int fd = *(int *)(f->esp + 4);
-      void *buffer = *(void **)(f->esp + 8);
-      unsigned size = *(unsigned *)(f->esp + 12);
-      
-      f->eax = write(fd, buffer, size);
-  break;
-}
-    default:
-      printf("Unknown syscall number: %d\n", syscall_num);
-      thread_exit();
-  }
-}
+        case SYS_REMOVE:
+          if (!is_valid_ptr(esp + 1) || !is_valid_ptr((void *) *(esp + 1)))
+            exit(-1);
+          f->eax = remove((char *) *(esp + 1));
+          break;
 
-/* 실제 시스템 콜 함수들 - 반드시 handler 함수 밖에 정의할 것! */
-void halt(void) {
-  shutdown_power_off();  // QEMU 종료
-}
+        case SYS_OPEN:
+          if (!is_valid_ptr(esp + 1) || !is_valid_ptr((void *) *(esp + 1)))
+            exit(-1);
+          f->eax = open((char *) *(esp + 1));
+          break;
 
-void exit(int status) {
-  struct thread *cur = thread_current();
-  printf("%s: exit(%d)\n", cur->name, status);
+        case SYS_FILESIZE:
+          if (!is_valid_ptr(esp + 1))
+            exit(-1);
+          f->eax = filesize(*(esp + 1));
+          break;
+
+        case SYS_READ:
+          if (!is_valid_ptr(esp + 7) || !is_valid_ptr((void *) *(esp + 6)))
+            exit(-1);
+          f->eax = read(*(esp + 5), (void *) *(esp + 6), *(esp + 7));
+          break;
+
+        case SYS_WRITE:
+          {
+            if(!is_valid_ptr(esp+7)){
+              exit(-1);
+            } else if (!is_valid_ptr(*(esp+6)))
+            {
+              exit(-1);
+            }
+            
+            int fd = *(esp+5);
+            const void *buffer = *(esp+6);
+            unsigned size = *(esp+7);
+          
+            f->eax = write(fd, buffer, size);
+          }
+          break;
+
+        case SYS_SEEK:
+          if (!is_valid_ptr(esp + 2))
+            exit(-1);
+          seek(*(esp + 1), *(esp + 2));
+          break;
+
+        case SYS_TELL:
+          if (!is_valid_ptr(esp + 1))
+            exit(-1);
+          f->eax = tell(*(esp + 1));
+          break;
+
+        case SYS_CLOSE:
+          if (!is_valid_ptr(esp + 1))
+            exit(-1);
+          close(*(esp + 1));
+          break;
+
+        default:
+          break;
+        }
+
+    }
+
+
+
+void
+exit(int status) {
+  struct thread *cur = thread_current();               // 4-1. 현재 스레드
+  printf("%s: exit(%d)\n", cur->name, status);         // 4-2. 종료 메시지 출력
+  //thread_exit_with_status(status);                     // 4-3. 종료 (상태 전달)
+  // 임시 대안 (기본 PintOS 구조 기준)
   cur->exit_status = status;
   thread_exit();
 }
 
-int wait(int pid) {
+void
+halt (void)
+{
+  shutdown_power_off ();
+}
+
+
+int 
+wait (tid_t pid)
+{ 
   return process_wait(pid);
 }
 
-int write(int fd, const void *buffer, unsigned size) {
-
-  if (buffer == NULL || !is_user_vaddr(buffer)) {
+/* 🛠️ 3-49 bool create 구현완료 */
+static bool
+create(const char *file_name, unsigned initial_size)
+{
+  if (!is_valid_ptr(file_name))
     exit(-1);
-  }
-  lock_acquire(&filesys_lock);
 
-  int bytes_written = 0;
-  
-  if (fd == 1) {
-    putbuf((char *)buffer, size);  // 반드시 캐스팅
-    bytes_written = size;
-  }else {
-    bytes_written = 0;
-  }
+  lock_acquire(&fs_lock);
+  bool success = filesys_create(file_name, initial_size);
+  lock_release(&fs_lock);
+  return success;
+}
+/* 🛠️ 3-50 bool remove 구현완료 */
+static bool
+remove(const char *file_name)
+{
+  if (!is_valid_ptr(file_name))
+    exit(-1);
 
-  lock_release(&filesys_lock);
-  return bytes_written;
+  lock_acquire(&fs_lock);
+  bool success = filesys_remove(file_name);
+  lock_release(&fs_lock);
+  return success;
 }
 
-bool is_valid_ptr(const void *usr_ptr) {
-  return usr_ptr != NULL
-      && is_user_vaddr(usr_ptr)
-      && pagedir_get_page(thread_current()->pagedir, usr_ptr) != NULL;
+/* 🛠️ 3-51~52 int open 구현완료 */
+static int
+open(const char *file_name)
+{
+  if (!is_valid_ptr(file_name))
+    exit(-1);
+
+  lock_acquire(&fs_lock);
+  struct file *f = filesys_open(file_name);
+  if (f == NULL)
+  {
+    lock_release(&fs_lock);
+    return -1;
+  }
+  struct file_descriptor *fd = malloc(sizeof(struct file_descriptor));
+  if (fd == NULL)
+  {
+    file_close(f);
+    lock_release(&fs_lock);
+    return -1;
+  }
+
+  fd->fd_num = allocate_fd();                
+  fd->file_struct = f;                         
+  fd->owner = thread_current()->tid;           
+  list_push_back(&open_files, &fd->elem);     
+
+  lock_release(&fs_lock);
+  return fd->fd_num;
+}
+/* 🛠️ 3-52 int allocate_fd 구현완료 */
+static int
+allocate_fd(void)
+{
+  static int next_fd = 2;
+  return next_fd++;
+}
+
+/* 🛠️ 3-53 int filesize 구현완료 */
+static int
+filesize(int fd)
+{
+  lock_acquire(&fs_lock);
+  struct file_descriptor *fd_struct = get_open_file(fd);
+
+  if (fd_struct == NULL)
+  {
+    lock_release(&fs_lock);
+    return -1;
+  }
+  int size = file_length(fd_struct->file_struct);
+
+  lock_release(&fs_lock);
+  return size;
+}
+
+/* 🛠️ 3-54~55 int read 구현완료 */
+static int
+read(int fd, void *buffer, unsigned size)
+{
+  if (!is_valid_ptr(buffer))
+    exit(-1);
+
+  lock_acquire(&fs_lock);
+
+  if (fd == STDOUT_FILENO)
+  {
+    lock_release(&fs_lock);
+    return -1;
+  }
+
+  int status = -1;
+
+  if (fd == STDIN_FILENO)
+  {
+    unsigned i;
+    uint8_t *buf = buffer;
+    for (i = 0; i < size; i++)
+      buf[i] = input_getc();
+    status = size;
+  }
+  else
+  {
+    struct file_descriptor *fd_struct = get_open_file(fd);
+    if (fd_struct != NULL)
+      status = file_read(fd_struct->file_struct, buffer, size);
+  }
+
+  lock_release(&fs_lock);
+  return status;
 }
 
 
+int
+write (int fd, const void *buffer, unsigned size)
+{
+  struct file_descriptor *fd_struct;  
+  int status = 0;
+
+  if (!is_valid_ptr (buffer))
+    exit (-1);
+
+  lock_acquire (&fs_lock); 
+
+  if (fd == STDIN_FILENO)
+    {
+      lock_release(&fs_lock);
+      return -1;
+    }
+
+  if (fd == STDOUT_FILENO)
+    {
+      putbuf (buffer, size);
+      lock_release(&fs_lock);
+      return size;
+    }
+
+  fd_struct = get_open_file (fd);
+  if (fd_struct != NULL)
+    status = file_write (fd_struct->file_struct, buffer, size);
+  lock_release (&fs_lock);
+  return status;
+}
+
+/* 🛠️ 3-56 void seek 구현완료 */
+static void
+seek(int fd, unsigned position)
+{
+  lock_acquire(&fs_lock);
+  struct file_descriptor *fd_struct = get_open_file(fd);
+
+  if (fd_struct != NULL)
+    file_seek(fd_struct->file_struct, position);
+
+  lock_release(&fs_lock);
+}
+
+/* 🛠️ 3-57 unsigned tell 구현완료 */
+static unsigned
+tell(int fd)
+{
+  lock_acquire(&fs_lock);
+  struct file_descriptor *fd_struct = get_open_file(fd);
+  unsigned result = 0;
+  if (fd_struct != NULL)
+    result = file_tell(fd_struct->file_struct);
+
+  lock_release(&fs_lock);
+  return result;
+}
+
+/* 🛠️ 3-58 void close 구현완료 */
+static void
+close(int fd)
+{
+  lock_acquire(&fs_lock);
+  struct file_descriptor *fd_struct = get_open_file(fd);
+
+  if (fd_struct != NULL && fd_struct->owner == thread_current()->tid)
+    close_open_file(fd);
+
+  lock_release(&fs_lock);
+}
+
+/* 🛠️ 3-59 void close_open_file 구현완료 */
+static void
+close_open_file(int fd)
+{
+  struct list_elem *e = list_begin(&open_files);
+
+  while (e != list_end(&open_files))
+  {
+    struct file_descriptor *fd_struct = list_entry(e, struct file_descriptor, elem);
+
+    if (fd_struct->fd_num == fd)
+    {
+      e = list_remove(e);
+      file_close(fd_struct->file_struct);
+      free(fd_struct);
+      return;
+    }
+    else
+    {
+      e = list_next(e);
+    }
+  }
+}
+
+
+
+
+
+
+struct file_descriptor *
+get_open_file (int fd)
+{
+  struct list_elem *e;
+  struct file_descriptor *fd_struct; 
+  e = list_tail(&open_files);
+  while (e != list_head(&open_files)) {
+    fd_struct = list_entry(e, struct file_descriptor, elem);
+    if (fd_struct->fd_num == fd)
+        return fd_struct;
+    e = list_prev(e);
+  }
+  return NULL;
+}
+
+
+
+/* The kernel must be very careful about doing so, because the user can
+ * pass a null pointer, a pointer to unmapped virtual memory, or a pointer
+ * to kernel virtual address space (above PHYS_BASE). All of these types of
+ * invalid pointers must be rejected without harm to the kernel or other
+ * running processes, by terminating the offending process and freeing
+ * its resources.
+ */
+bool is_valid_ptr(const void *ptr) {
+  return ptr != NULL &&
+         is_user_vaddr(ptr) &&
+         pagedir_get_page(thread_current()->pagedir, ptr) != NULL;
+}

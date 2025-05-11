@@ -18,154 +18,211 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
-/* 구조체 정의 (userprog/process.c 상단에 추가) */
-struct start_info {
-  char *cmdline;        /* palloc으로 받아온 원본 문자열 */
-  char *argv[128];      /* 인자 포인터 배열 */
-  int   argc;           /* 인자 개수 */
-};
-
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-static void argument_stack(char *argv[], int argc, void **esp);
+/*Argument Parsing - 3 선언 추가*/
+static void argument_stack(const char* argv[], int argc, void **esp);
 
-/*---------------------------------------------------------------------------*/
+
+
+/* Starts a new thread running a user program loaded from
+   FILENAME.  The new thread may be scheduled (and may even exit)
+   before process_execute() returns.  Returns the new process's
+   thread id, or TID_ERROR if the thread cannot be created. */
+
+/*Argument Parsing -1 */
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy;
+  char *fn_copy, *file_name_copy, *save_ptr;
   tid_t tid;
 
-  // (1) 실행할 명령어 전체 문자열 복사
-  fn_copy = palloc_get_page(0);
+  /* Make a copy of FILE_NAME for the new thread. */
+  fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy(fn_copy, file_name, PGSIZE);  // ⬅️ 이게 실제 인자로 넘길 문자열
+  strlcpy (fn_copy, file_name, PGSIZE);
 
-  // (2) 실행파일 이름만 파싱해서 thread 이름으로 사용
-  char *exec_name = palloc_get_page(0);
-  if (exec_name == NULL) {
+  /* Make another copy for strtok_r parsing */
+  file_name_copy = palloc_get_page(0);
+  if (file_name_copy == NULL) {
     palloc_free_page(fn_copy);
     return TID_ERROR;
   }
-  strlcpy(exec_name, file_name, PGSIZE);
+  strlcpy(file_name_copy, file_name, PGSIZE);
 
-  char *save_ptr;
-  char *prog_name = strtok_r(exec_name, " ", &save_ptr); // "args-single"
+  /* Parse the program name (e.g., "/bin/ls") */
+  char *program_name = strtok_r(file_name_copy, " ", &save_ptr);
 
-  // (3) 스레드 생성
-  tid = thread_create(prog_name, PRI_DEFAULT, start_process, fn_copy);
+  /* Create thread using program name only */
+  tid = thread_create (program_name, PRI_DEFAULT, start_process, fn_copy);
 
-  // (4) 실패 처리
   if (tid == TID_ERROR)
-    palloc_free_page(fn_copy);
+    palloc_free_page (fn_copy);
 
-  palloc_free_page(exec_name);  // 🎯 메모리 누수 방지
+  palloc_free_page(file_name_copy); // cleanup after parsing
 
   return tid;
 }
 
-static void
-start_process (void *file_name_)
-{
-  char *argv[128];
+/* A thread function that loads a user process and starts it
+   running. */
+
+/*Argument Parsing -2*/
+static void 
+start_process(void *file_name_) {
+  char *file_name = file_name_;
+  struct intr_frame if_;
+  bool success;
+  int i;
+
+
+  // 파싱 준비
+  const char *argv[128];
   int argc = 0;
   char *token, *save_ptr;
-  char *file_name = file_name_;
-  struct intr_frame if_;   // ← 인터럽트 프레임 구조체
-  bool success;            // ← load 성공 여부
 
-  for (token = strtok_r(file_name, " ", &save_ptr);
-     token != NULL;
-     token = strtok_r(NULL, " ", &save_ptr)) {
-  argv[argc++] = token;  // ✅ 여기에서 palloc 하지 마세요!
-}
+  // 인자 파싱
+  for (token = strtok_r(file_name, " ", &save_ptr); token != NULL;
+       token = strtok_r(NULL, " ", &save_ptr)) {
+    argv[argc++] = token;
+  }
 
-  /* 2. 인터럽트 프레임 초기화 */
+  // 인터럽트 프레임 초기화
   memset(&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
 
-  success = load(argv[0], &if_.eip, &if_.esp);
+  // 프로그램 로드 (argv[0] = 실행파일 이름)
+  success = load(file_name, &if_.eip, &if_.esp);
 
-if (!success) {
-    palloc_free_page(file_name);  // ❗실패했을 때만 해제
+
+
+  if (!success) {
     thread_exit();
   }
 
-  // 스택에 인자 넣기
-  argument_stack(argv, argc, &if_.esp);
+  // 인자 스택 세팅
+  argument_stack(argv, argc, &if_.esp);  // 스택 설정 후
+  //char **argv_stack = (char **)(if_.esp + sizeof(void *) * 2); // return address + argc
+
+
+//   for (i = 0; i < argc; i++) {
+//   if (pagedir_get_page(thread_current()->pagedir, argv[i]) == NULL)
+//     printf("[ERROR] argv[%d] = %p is not mapped!\n", i, argv[i]);
+//   else
+//     printf("[OK] argv[%d] = %p\n", i, argv[i]);
+// }
+
+  // 디버깅용
   //hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
 
-  /* 7. 유저 프로세스로 진입 */
-  asm volatile ("movl %0, %%esp; jmp intr_exit"
-                : : "g" (&if_) : "memory");
+
+
+  // 파일명 복사 메모리 해제
+
+  palloc_free_page(file_name);
+
+  // 유저모드 진입
+  //printf("Jumping to user mode: eip=%p, esp=%p\n", if_.eip, if_.esp);
+
+
+  
+  asm volatile("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED();
 }
-static void argument_stack(char *argv[], int argc, void **esp) {
-  char *arg_addrs[128];
-  int i;
 
-  // 1. Push strings (역순으로 넣되, 주소는 정순으로 저장)
+static void
+argument_stack(const char *argv[], int argc, void **esp)
+{
+  int i;
+  void *argv_addr[argc];
+  size_t len;
+
+  ASSERT(argc > 0);
+
+  /* 1. Push strings to stack (reverse order) */
   for (i = argc - 1; i >= 0; i--) {
-    size_t len = strlen(argv[i]) + 1;
+    len = strlen(argv[i]) + 1;
     *esp -= len;
     memcpy(*esp, argv[i], len);
-    arg_addrs[i] = *esp;
+    argv_addr[i] = *esp;  // Save the address where each arg is copied
   }
 
-  // 2. Word-align
-  uintptr_t misalign = (uintptr_t)(*esp) % 4;
-  if (misalign > 0) {
-    *esp -= misalign;
-    memset(*esp, 0, misalign);
+  /* 2. Word align */
+  while ((uintptr_t)(*esp)%4 != 0)
+  {
+    *esp -= 1;
+    memset(*esp,0,1);
   }
-
-  // 3. NULL sentinel
-  *esp -= sizeof(char *);
-  *(char **)*esp = NULL;
-
-  // 4. Push argv[i] pointers (정순)
-  for (i = 0; i < argc; i++) {
-    *esp -= sizeof(char *);
-    *(char **)*esp = arg_addrs[i];
-  }
-
-  // 5. Save argv pointer
-  char **argv_start = (char **)*esp;
-
-  // 6. Push argv
-  *esp -= sizeof(char **);
-  *(char ***)*esp = argv_start;
-
-  // 7. Push argc
-  *esp -= sizeof(int);
-  *(int *)*esp = argc;
-
-  // 8. Fake return address
-  *esp -= sizeof(void *);
-  *(void **)*esp = NULL;
-
-  printf("(args) begin\n");
-  printf("(args) argc = %d\n", argc);
   
-  for (i = 0; i <= argc; i++) {
-    char *arg_ptr = (i == argc) ? NULL : arg_addrs[i];
-    if (arg_ptr == NULL)
-    printf("(args) argv[%d] = null\n", i);
-    else
-    printf("(args) argv[%d] = '%s'\n", i, arg_ptr);
-    }
-    printf("(args) end\n");
-    }
 
-/* Waits for thread TID to die and returns its exit status. */
+  /* 3. Push null sentinel */
+  *esp -= sizeof(char *);
+  memset(*esp,0,sizeof(char *));
+
+  /* 4. Push addresses of argv[i] */
+  for (i = argc - 1; i >= 0; i--) {
+    *esp -= sizeof(char*);
+    memcpy(*esp, &argv_addr[i],sizeof(char *));
+  }
+
+  /* 5. Push argv (char **) */
+  void *argv_start = *esp;
+  *esp -= sizeof(char **);
+  memcpy(*esp, &argv_start, sizeof(char **));
+
+  /* 6. Push argc */
+  *esp -= sizeof(int);
+  memcpy(*esp, &argc, sizeof(int));
+
+  /* 7. Push dummy return address */
+  *esp -= sizeof(void *);
+  memset(*esp, 0, sizeof(void *));
+
+//   for (i = 0; i < argc; i++) {
+//   printf("[DEBUG] argv[%d] = %p\n", i, argv[i]);
+//   if (!is_user_vaddr(argv[i]))
+//     printf("❌ argv[%d] = %p is not in user address space!\n", i, argv[i]);
+// }
+  
+  
+  // // ===== 디버깅 시작 =====
+  // printf("[CHECK] final user esp: %p\n", *esp);
+
+  // // 스택 상단 구조 확인 (return address, argc, argv 포인터)
+  // uint32_t *esp_check = (uint32_t *) *esp;
+  // printf("[CHECK] *esp[0] (return addr) = 0x%08x\n", esp_check[0]);
+  // printf("[CHECK] *esp[1] (argc)        = %u\n", esp_check[1]);
+  // printf("[CHECK] *esp[2] (argv addr)   = 0x%08x\n", esp_check[2]);
+
+  // // argv 내부의 주소값들과 문자열 직접 확인
+  // char **argv_check = (char **) esp_check[2];
+  // printf("[CHECK] argv[0] = 0x%08x → %s\n", (uint32_t)argv_check[0], argv_check[0]);
+  // printf("[CHECK] argv[1] = 0x%08x → %s\n", (uint32_t)argv_check[1], argv_check[1]);
+  // printf("[CHECK] argv[2] = 0x%08x (should be NULL)\n", (uint32_t)argv_check[2]);
+  // // ===== 디버깅 끝 =====
+}
+
+
+
+
+/* Waits for thread TID to die and returns its exit status.  If
+   it was terminated by the kernel (i.e. killed due to an
+   exception), returns -1.  If TID is invalid or if it was not a
+   child of the calling process, or if process_wait() has already
+   been successfully called for the given TID, returns -1
+   immediately, without waiting.
+
+   This function will be implemented in problem 2-2.  For now, it
+   does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
-{
+process_wait (tid_t child_tid UNUSED) {
+  
   volatile int i;
-  for(i=0 ; i< 1000000000; i++) {
+    for (i = 0 ; i < 1000000000 ; i ++)
+  {
 
   }
   return -1;
@@ -177,13 +234,25 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  /* Destroy the current process's page directory and switch back
+     to the kernel-only page directory. */
   pd = cur->pagedir;
-  if (pd != NULL)
-  {
-    cur->pagedir = NULL;
-    pagedir_activate (NULL);
-    pagedir_destroy (pd);
-  }
+  if (pd != NULL) 
+    {
+      /* Correct ordering here is crucial.  We must set
+         cur->pagedir to NULL before switching page directories,
+         so that a timer interrupt can't switch back to the
+         process page directory.  We must activate the base page
+         directory before destroying the process's page
+         directory, or our active page directory will be one
+         that's been freed (and cleared). */
+      cur->pagedir = NULL;
+      pagedir_activate (NULL);
+      pagedir_destroy (pd);
+    }
+
+    
 }
 
 /* Sets up the CPU for running user code in the current
@@ -201,7 +270,7 @@ process_activate (void)
      interrupts. */
   tss_update ();
 }
-
+
 /* We load ELF binaries.  The following definitions are taken
    from the ELF specification, [ELF1], more-or-less verbatim.  */
 
@@ -295,9 +364,13 @@ load (const char *file_name, void (**eip) (void), void **esp)
   file = filesys_open (file_name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      file_close(file);
       goto done; 
     }
+
+    t->exec_file = file;
+    file_deny_write(file);
+    
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -308,7 +381,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", file_name);
       goto done; 
     }
 
@@ -369,8 +441,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
             goto done;
           break;
         }
+
     }
 
+  
   /* Set up stack. */
   if (!setup_stack (esp))
     goto done;
@@ -379,13 +453,21 @@ load (const char *file_name, void (**eip) (void), void **esp)
   *eip = (void (*) (void)) ehdr.e_entry;
 
   success = true;
+  
+  
+
+  
+  
 
  done:
-  /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  // if (!success && file != NULL)
+  //file_close(file);  // 실패했을 때만 닫음
   return success;
-}
 
+
+
+}
+
 /* load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);
@@ -410,7 +492,7 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
   /* The segment must not be empty. */
   if (phdr->p_memsz == 0)
     return false;
-
+  
   /* The virtual memory region must both start and end within the
      user address space range. */
   if (!is_user_vaddr ((void *) phdr->p_vaddr))
