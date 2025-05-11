@@ -14,6 +14,7 @@
 #include "devices/input.h"
 #include "threads/synch.h"
 
+//User Programs: File Manipulation-1 
 struct file_descriptor
 {
   int fd_num;
@@ -65,6 +66,7 @@ syscall_init (void)
   lock_init (&fs_lock);
 }
 
+//User Programs: System Calls-1
 static void
 syscall_handler (struct intr_frame *f)
 {
@@ -75,8 +77,6 @@ syscall_handler (struct intr_frame *f)
 
   int syscall_number = * esp;
 
-  
-   
   switch (syscall_number)
         {
         case SYS_HALT:
@@ -166,30 +166,31 @@ syscall_handler (struct intr_frame *f)
 
     }
 
+    //User Programs: System Calls-3
+    int 
+    wait (tid_t pid)
+    { 
+      return process_wait(pid);
+    }
 
+    //User Programs: System Calls-4
+    void
+    exit(int status) {
+      struct thread *cur = thread_current();               // 4-1. 현재 스레드
+      printf("%s: exit(%d)\n", cur->name, status);         // 4-2. 종료 메시지 출력
+      //thread_exit_with_status(status);                     // 4-3. 종료 (상태 전달)
+      // 임시 대안 (기본 PintOS 구조 기준)
+      cur->exit_status = status;
+      thread_exit();
+      }
 
-void
-exit(int status) {
-  struct thread *cur = thread_current();               // 4-1. 현재 스레드
-  printf("%s: exit(%d)\n", cur->name, status);         // 4-2. 종료 메시지 출력
-  //thread_exit_with_status(status);                     // 4-3. 종료 (상태 전달)
-  // 임시 대안 (기본 PintOS 구조 기준)
-  cur->exit_status = status;
-  thread_exit();
-}
+      //User Programs: System Calls-5
+      void
+      halt (void)
+      {
+        shutdown_power_off ();
+      }
 
-void
-halt (void)
-{
-  shutdown_power_off ();
-}
-
-
-int 
-wait (tid_t pid)
-{ 
-  return process_wait(pid);
-}
 
 /* 🛠️ 3-49 bool create 구현완료 */
 static bool
@@ -308,24 +309,28 @@ read(int fd, void *buffer, unsigned size)
   return status;
 }
 
-
+//User Programs: File Manipulation-4
 int
 write (int fd, const void *buffer, unsigned size)
 {
   struct file_descriptor *fd_struct;  
   int status = 0;
 
+  // 버퍼 포인터의 유효성 검사 (유저 영역에 존재하는지 등)
   if (!is_valid_ptr (buffer))
     exit (-1);
 
+  // 파일 시스템 보호를 위한 락 획득
   lock_acquire (&fs_lock); 
 
+  // 표준 입력에는 쓰기가 불가능하므로 -1 반환
   if (fd == STDIN_FILENO)
     {
       lock_release(&fs_lock);
       return -1;
     }
 
+  // 표준 출력일 경우 putbuf()로 화면에 출력하고 종료
   if (fd == STDOUT_FILENO)
     {
       putbuf (buffer, size);
@@ -333,9 +338,12 @@ write (int fd, const void *buffer, unsigned size)
       return size;
     }
 
+  // 열린 파일 목록에서 해당 fd를 찾아 파일에 쓰기 수행
   fd_struct = get_open_file (fd);
   if (fd_struct != NULL)
     status = file_write (fd_struct->file_struct, buffer, size);
+
+  // 락 해제 후 결과 반환
   lock_release (&fs_lock);
   return status;
 }
@@ -404,27 +412,29 @@ close_open_file(int fd)
   }
 }
 
-
-
-
-
-
+//User Programs: File Manipulation-3
 struct file_descriptor *
 get_open_file (int fd)
 {
   struct list_elem *e;
   struct file_descriptor *fd_struct; 
+  
+  /* open_files 리스트의 마지막 요소부터 순회 시작 */
   e = list_tail(&open_files);
+
+  /* 리스트의 시작(head)에 도달할 때까지 순회 */
   while (e != list_head(&open_files)) {
-    fd_struct = list_entry(e, struct file_descriptor, elem);
+    fd_struct = list_entry(e, struct file_descriptor, elem); /* 리스트 요소를 file_descriptor 구조체로 변환 */
+    
+    /* fd 번호가 일치하면 해당 구조체를 반환 */
     if (fd_struct->fd_num == fd)
         return fd_struct;
-    e = list_prev(e);
+    e = list_prev(e);    /* 이전 요소로 이동 */
   }
+  
+  /* 일치하는 파일 디스크립터를 찾지 못한 경우 NULL 반환 */
   return NULL;
 }
-
-
 
 /* The kernel must be very careful about doing so, because the user can
  * pass a null pointer, a pointer to unmapped virtual memory, or a pointer
@@ -433,6 +443,8 @@ get_open_file (int fd)
  * running processes, by terminating the offending process and freeing
  * its resources.
  */
+
+//User Programs: System Calls-2
 bool is_valid_ptr(const void *ptr) {
   return ptr != NULL &&
          is_user_vaddr(ptr) &&

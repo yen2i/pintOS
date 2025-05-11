@@ -31,19 +31,25 @@ static void argument_stack(const char* argv[], int argc, void **esp);
    thread id, or TID_ERROR if the thread cannot be created. */
 
 /*Argument Parsing -1 */
+/*Argument Parsing -1 */
 tid_t
 process_execute (const char *file_name) 
 {
+  // fn_copy: 실제 start_process()에 넘겨질 문자열의 복사본
+  // file_name_copy: strtok_r로 파싱해서 프로그램 이름만 추출할 때 사용할 복사본
+  // save_ptr: strtok_r의 상태 저장용 포인터
+  // tid: create한 thread ID 저장
   char *fn_copy, *file_name_copy, *save_ptr;
   tid_t tid;
 
-  /* Make a copy of FILE_NAME for the new thread. */
+  /* Make a copy of FILE_NAME.
+     Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  /* Make another copy for strtok_r parsing */
+  // 프로그램 이름만 추출
   file_name_copy = palloc_get_page(0);
   if (file_name_copy == NULL) {
     palloc_free_page(fn_copy);
@@ -51,16 +57,18 @@ process_execute (const char *file_name)
   }
   strlcpy(file_name_copy, file_name, PGSIZE);
 
-  /* Parse the program name (e.g., "/bin/ls") */
+  // program_name에 실제 실행할 유저 프로그램 파일 이름 저장
   char *program_name = strtok_r(file_name_copy, " ", &save_ptr);
 
-  /* Create thread using program name only */
+  // Create thread using program name only
   tid = thread_create (program_name, PRI_DEFAULT, start_process, fn_copy);
 
+	// thread 생성 실패시, fn_copy 메모리 해제
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy);
 
-  palloc_free_page(file_name_copy); // cleanup after parsing
+  // cleanup after parsing
+  palloc_free_page(file_name_copy); 
 
   return tid;
 }
@@ -78,57 +86,49 @@ start_process(void *file_name_) {
 
 
   // 파싱 준비
+  // 인자 문자열의 포인터를 담을 배열(최대 128개 인자 처리 가능)
   const char *argv[128];
+  // 실제 인자 개수 저장
   int argc = 0;
+  // token: 분할된 문자열 저장용, save_ptr: strtok_r에서 상태 저장용
   char *token, *save_ptr;
 
-  // 인자 파싱
+  // 인자 문자열 파싱
+  // file_name을 공백 기준으로 인자 분리 (인자 개수 증가 포함)
   for (token = strtok_r(file_name, " ", &save_ptr); token != NULL;
        token = strtok_r(NULL, " ", &save_ptr)) {
     argv[argc++] = token;
   }
 
-  // 인터럽트 프레임 초기화
+  /* Initialize interrupt frame and load executable. */
   memset(&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
 
-  // 프로그램 로드 (argv[0] = 실행파일 이름)
+  // 프로그램 로드, eip는 시작 주소, esp는 초기 스택 포인터 
   success = load(file_name, &if_.eip, &if_.esp);
-
-
-
+  
+  // 로드 실패시, 스레드 종료 
   if (!success) {
     thread_exit();
   }
 
   // 인자 스택 세팅
-  argument_stack(argv, argc, &if_.esp);  // 스택 설정 후
-  //char **argv_stack = (char **)(if_.esp + sizeof(void *) * 2); // return address + argc
+  argument_stack(argv, argc, &if_.esp);  // 파싱한 인자들 유저 스택에 싸
 
-
-//   for (i = 0; i < argc; i++) {
-//   if (pagedir_get_page(thread_current()->pagedir, argv[i]) == NULL)
-//     printf("[ERROR] argv[%d] = %p is not mapped!\n", i, argv[i]);
-//   else
-//     printf("[OK] argv[%d] = %p\n", i, argv[i]);
-// }
-
-  // 디버깅용
+  // hex_dump 출력
   //hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
 
-
-
   // 파일명 복사 메모리 해제
-
   palloc_free_page(file_name);
 
-  // 유저모드 진입
-  //printf("Jumping to user mode: eip=%p, esp=%p\n", if_.eip, if_.esp);
-
-
-  
+   /* Start the user process by simulating a return from an
+     interrupt, implemented by intr_exit (in
+     threads/intr-stubs.S).  Because intr_exit takes all of its
+     arguments on the stack in the form of a `struct intr_frame',
+     we just point the stack pointer (%esp) to our stack frame
+     and jump to it. */
   asm volatile("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED();
 }
@@ -137,12 +137,15 @@ static void
 argument_stack(const char *argv[], int argc, void **esp)
 {
   int i;
+  // argv[i]로 포인터 push할때 사용
   void *argv_addr[argc];
   size_t len;
 
   ASSERT(argc > 0);
 
-  /* 1. Push strings to stack (reverse order) */
+  // copy the arguments to the stack (reverse order)
+  /* 스택은 위에서 아래로 쌓기 때문에 -= 연산을 통해 주소를 줄여가며 복사
+  & 역순으로 push 해야 나중에 argv 포인터들이 정순으로 나열됨 */
   for (i = argc - 1; i >= 0; i--) {
     len = strlen(argv[i]) + 1;
     *esp -= len;
@@ -150,7 +153,7 @@ argument_stack(const char *argv[], int argc, void **esp)
     argv_addr[i] = *esp;  // Save the address where each arg is copied
   }
 
-  /* 2. Word align */
+  // word align (4byte) -=1을 반복, 4의 배수가 될 때까지 0채움
   while ((uintptr_t)(*esp)%4 != 0)
   {
     *esp -= 1;
@@ -158,35 +161,32 @@ argument_stack(const char *argv[], int argc, void **esp)
   }
   
 
-  /* 3. Push null sentinel */
-  *esp -= sizeof(char *);
+  // null sentinel push, argv의 끝을 표시함
+   *esp -= sizeof(char *);
   memset(*esp,0,sizeof(char *));
 
-  /* 4. Push addresses of argv[i] */
+
+  /* argv[i] 포인터 push 
+  argv_addr[i]에 저장한 유저 주소를 스택에 포인터로 저장
+  즉, 스택에 argv[0], argv[1], ... 이 순서대로 포인터가 쌓임*/
   for (i = argc - 1; i >= 0; i--) {
     *esp -= sizeof(char*);
     memcpy(*esp, &argv_addr[i],sizeof(char *));
   }
 
-  /* 5. Push argv (char **) */
+  /* argv의 시작 주소 push, 
+  char **argv는 argv[0]부터 시작하는 배열의 주소 */
   void *argv_start = *esp;
   *esp -= sizeof(char **);
   memcpy(*esp, &argv_start, sizeof(char **));
 
-  /* 6. Push argc */
+  // argc push
   *esp -= sizeof(int);
   memcpy(*esp, &argc, sizeof(int));
 
-  /* 7. Push dummy return address */
+  // return address
   *esp -= sizeof(void *);
   memset(*esp, 0, sizeof(void *));
-
-//   for (i = 0; i < argc; i++) {
-//   printf("[DEBUG] argv[%d] = %p\n", i, argv[i]);
-//   if (!is_user_vaddr(argv[i]))
-//     printf("❌ argv[%d] = %p is not in user address space!\n", i, argv[i]);
-// }
-  
   
   // // ===== 디버깅 시작 =====
   // printf("[CHECK] final user esp: %p\n", *esp);
@@ -197,16 +197,12 @@ argument_stack(const char *argv[], int argc, void **esp)
   // printf("[CHECK] *esp[1] (argc)        = %u\n", esp_check[1]);
   // printf("[CHECK] *esp[2] (argv addr)   = 0x%08x\n", esp_check[2]);
 
-  // // argv 내부의 주소값들과 문자열 직접 확인
   // char **argv_check = (char **) esp_check[2];
   // printf("[CHECK] argv[0] = 0x%08x → %s\n", (uint32_t)argv_check[0], argv_check[0]);
   // printf("[CHECK] argv[1] = 0x%08x → %s\n", (uint32_t)argv_check[1], argv_check[1]);
   // printf("[CHECK] argv[2] = 0x%08x (should be NULL)\n", (uint32_t)argv_check[2]);
   // // ===== 디버깅 끝 =====
 }
-
-
-
 
 /* Waits for thread TID to die and returns its exit status.  If
    it was terminated by the kernel (i.e. killed due to an
@@ -344,6 +340,8 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    Stores the executable's entry point into *EIP
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
+   
+//User Programs: File Manipulation-2
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
 {
@@ -370,7 +368,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
     t->exec_file = file;
     file_deny_write(file);
-    
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
