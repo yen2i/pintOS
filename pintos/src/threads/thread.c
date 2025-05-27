@@ -1,4 +1,5 @@
 #include "threads/thread.h"
+#include "vm/page.h" //SPT
 #include <debug.h>
 #include <stddef.h>
 #include <random.h>
@@ -375,6 +376,8 @@ thread_exit (void)
   thread_current ()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
+
+  spt_destroy(thread_current());  // ✅ SPT 메모리 해제
 }
 
 /* Yields the CPU.  The current thread is not put to sleep and
@@ -649,9 +652,11 @@ init_thread (struct thread *t, const char *name, int priority)
     t->recent_cpu = 0;
   }
 
-
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
+
+  spt_create(t);  // ✅ SPT 초기화
+
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

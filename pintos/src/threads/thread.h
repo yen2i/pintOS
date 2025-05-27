@@ -4,6 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <hash.h>
+
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -82,6 +84,8 @@ typedef int tid_t;
    blocked state is on a semaphore wait list. */
 struct thread
   {
+   struct hash page_map;  // SPT
+
     /* Owned by thread.c. */
     tid_t tid;                          /* Thread identifier. */
     enum thread_status status;          /* Thread state. */
