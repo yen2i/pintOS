@@ -9,6 +9,8 @@
 #include "filesys/file.h"
 #include <string.h>
 #include "threads/palloc.h" 
+#include "vm/frame.h"        // 🔧 frame_allocate, frame_free
+
 
 static unsigned spt_hash(const struct hash_elem *e, void *aux UNUSED);
 static bool spt_less(const struct hash_elem *a, const struct hash_elem *b, void *aux UNUSED);
@@ -18,8 +20,27 @@ void spt_create(struct thread *t) {
   hash_init(&t->page_map, spt_hash, spt_less, NULL);
 }
 
+// 🔹 entry 하나씩 해제할 helper 함수
+static void spt_destroy_helper(struct hash_elem *e, void *aux UNUSED) {
+  struct supplemental_page_table_entry *spte = hash_entry(e, struct supplemental_page_table_entry, elem);
+
+  // 페이지가 프레임에 올라와 있다면 해제
+  if (spte->status == ON_FRAME && spte->kpage != NULL) {
+    frame_free(spte->kpage);
+  }
+
+  // lazy loading용 aux가 있으면 해제
+  if (spte->status == FROM_FILESYS && spte->aux != NULL) {
+    free(spte->aux);
+  }
+
+  // 마지막으로 spte 자체 해제
+  free(spte);
+}
+
+// 🔹 전체 spt 해제 함수
 void spt_destroy(struct thread *t) {
-  hash_destroy(&t->page_map, spt_free_entry);  // 🔧 메모리 해제 함수 연결!
+  hash_destroy(&t->page_map, spt_destroy_helper);
 }
 
 struct supplemental_page_table_entry *spt_lookup(struct thread *t, void *upage) {
@@ -66,7 +87,6 @@ vm_try_handle_fault(struct intr_frame *f, void *addr, bool write, bool user UNUS
     }
     return false;
   }
-
   if (write && !s->writable)
     return false;
 
@@ -92,11 +112,14 @@ vm_do_claim_page(struct supplemental_page_table_entry *s) {
       break;
 
     case FROM_FILESYS:
-      if (file_read_at(s->file, kpage, s->read_bytes, s->file_offset) != (int)s->read_bytes) {
-        frame_free(kpage);
-        return false;
+      if (s->init != NULL) {
+        if (!s->init(s, s->aux)) {
+          frame_free(kpage);
+          return false;
+        }
+      } else {
+        PANIC("No initializer function for FROM_FILESYS page");
       }
-      memset(kpage + s->read_bytes, 0, s->zero_bytes);
       break;
 
     default:
@@ -110,11 +133,19 @@ vm_do_claim_page(struct supplemental_page_table_entry *s) {
 
   return true;
 }
+
   void
   vm_stack_growth(void *addr) {
     void *upage = pg_round_down(addr);
-    if (vm_alloc_page(PAL_USER | PAL_ZERO, upage, true)) {
-      vm_claim_page(upage);
+
+    // 페이지 등록 (initializer는 NULL → all-zero page로)
+    if (!vm_alloc_page_with_initializer(PAL_USER, upage, true, NULL, NULL)) {
+      PANIC("Stack growth failed: could not allocate page.");
+    }
+
+    // 실제 페이지 할당
+    if (!vm_claim_page(upage)) {
+      PANIC("Stack growth failed: could not claim page.");
     }
   }
 
@@ -147,4 +178,55 @@ vm_claim_page(void *upage) {
     return false;
 
   return vm_do_claim_page(s);
+}
+
+bool
+install_page(void *upage, void *kpage, bool writable) {
+  struct thread *t = thread_current();
+
+  // 가상 주소가 이미 매핑되어 있으면 실패
+  if (pagedir_get_page(t->pagedir, upage) != NULL)
+    return false;
+
+  // 새로 매핑 시도
+  return pagedir_set_page(t->pagedir, upage, kpage, writable);
+}
+
+bool
+vm_alloc_page_with_initializer(enum palloc_flags flags, void *upage,
+                               bool writable, vm_initializer *init,
+                               void *aux) {
+  struct thread *t = thread_current();
+  upage = pg_round_down(upage);
+
+  if (spt_lookup(t, upage) != NULL)
+    return false;
+
+  struct supplemental_page_table_entry *spte = malloc(sizeof(struct supplemental_page_table_entry));
+  if (spte == NULL)
+    return false;
+
+  spte->upage = upage;
+  spte->kpage = NULL;
+  spte->writable = writable;
+  spte->status = (init == NULL) ? ALL_ZERO : FROM_FILESYS;
+  spte->init = init;
+  spte->aux = aux;
+
+  return (hash_insert(&t->page_map, &spte->elem) == NULL);
+}
+
+void
+vm_dealloc_page(void *upage) {
+  struct thread *t = thread_current();
+  struct supplemental_page_table_entry *spte = spt_lookup(t, upage);
+
+  if (spte == NULL)
+    return;
+
+  if (spte->kpage != NULL)
+    frame_free(spte->kpage);
+
+  hash_delete(&t->page_map, &spte->elem);
+  free(spte);
 }

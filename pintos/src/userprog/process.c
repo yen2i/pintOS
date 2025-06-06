@@ -18,13 +18,22 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "vm/page.h"  
+#include <stdlib.h>  // malloc 포함
+
+static bool lazy_load_segment(struct supplemental_page_table_entry *spte, void *aux);
+
+// process.c 최상단 includes 아래에 추가
+static struct load_info {
+  struct file *file;
+  off_t ofs;
+  size_t page_read_bytes;
+  size_t page_zero_bytes;
+};
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 /*Argument Parsing - 3 선언 추가*/
 static void argument_stack(const char* argv[], int argc, void **esp);
-
-
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -466,9 +475,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
 }
 
-/* load() helpers. */
-
-static bool install_page (void *upage, void *kpage, bool writable);
 
 /* Checks whether PHDR describes a valid, loadable segment in
    FILE and returns true if so, false otherwise. */
@@ -544,9 +550,20 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-      // 🔸 1. 페이지 등록 (기본 정보만 SPT에 넣음)
-      if (!vm_alloc_page(PAL_USER, upage, writable))
+        // 🔹 1. lazy loading용 초기화 정보 구조체 생성
+      struct load_info *aux = malloc(sizeof(struct load_info));
+      if (aux == NULL)
         return false;
+
+      aux->file = file;
+      aux->ofs = ofs;
+      aux->page_read_bytes = page_read_bytes;
+      aux->page_zero_bytes = page_zero_bytes;
+
+
+      // 🔸 1. 페이지 등록 (기본 정보만 SPT에 넣음)
+      if (!vm_alloc_page_with_initializer(PAL_USER, upage, writable, lazy_load_segment, aux))
+      return false;
 
       // 🔸 2. 해당 페이지 정보에 파일에서 로딩해야 할 데이터 기록
       struct supplemental_page_table_entry *spte = spt_lookup(thread_current(), upage);
@@ -597,13 +614,23 @@ setup_stack (void **esp)
    with palloc_get_page().
    Returns true on success, false if UPAGE is already mapped or
    if memory allocation fails. */
-static bool
-install_page (void *upage, void *kpage, bool writable)
-{
-  struct thread *t = thread_current ();
 
-  /* Verify that there's not already a page at that virtual
-     address, then map our page there. */
-  return (pagedir_get_page (t->pagedir, upage) == NULL
-          && pagedir_set_page (t->pagedir, upage, kpage, writable));
+static bool
+lazy_load_segment(struct supplemental_page_table_entry *spte, void *aux) {
+  struct file_info {
+    struct file *file;
+    off_t ofs;
+    size_t page_read_bytes;
+    size_t page_zero_bytes;
+  };
+
+  struct file_info *info = aux;
+
+  // 파일에서 읽기
+  if (file_read_at(info->file, spte->kpage, info->page_read_bytes, info->ofs) != (int)info->page_read_bytes)
+    return false;
+
+  // 남은 부분은 0으로 채우기
+  memset(spte->kpage + info->page_read_bytes, 0, info->page_zero_bytes);
+  return true;
 }

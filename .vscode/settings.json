@@ -8,6 +8,11 @@
         "console.h": "c",
         "synch.h": "c",
         "pagedir.h": "c",
-        "block.h": "c"
+        "block.h": "c",
+        "functional": "c",
+        "malloc.h": "c",
+        "pte.h": "c",
+        "interrupt.h": "c",
+        "page.h": "c"
     }
 }
